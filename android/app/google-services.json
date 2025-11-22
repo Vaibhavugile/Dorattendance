@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "802890927386",
+    "project_id": "dressonrent-7eb6b",
+    "storage_bucket": "dressonrent-7eb6b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:802890927386:android:e5dcd1cc862ff3620c70a3",
+        "android_client_info": {
+          "package_name": "com.example.dor"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAbt7w6QZJhjQdhOB1N18G9u9B4xNJYzOA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
