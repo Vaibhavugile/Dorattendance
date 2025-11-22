@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/auth_service.dart';
 import 'dart:math' as math;
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({Key? key}) : super(key: key);
@@ -17,26 +18,72 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
   final passC = TextEditingController();
   final nameC = TextEditingController();
   String? error;
-
   late AnimationController _anim;
+
+  // Branch list state
+  final FirebaseFirestore _db = FirebaseFirestore.instance;
+  List<Map<String, dynamic>> _branches = [];
+  String? _selectedBranchId;
+  String? _selectedBranchName;
+  bool _branchesLoading = true;
+  String? _branchesLoadError;
 
   @override
   void initState() {
     super.initState();
     _anim = AnimationController(vsync: this, duration: const Duration(seconds: 4))..repeat();
+    _loadBranches();
   }
 
   @override
   void dispose() {
     _anim.dispose();
-    emailC.dispose(); passC.dispose(); nameC.dispose();
+    emailC.dispose();
+    passC.dispose();
+    nameC.dispose();
     super.dispose();
   }
 
-  Future<void> _submit() async {
-    // Clear previous error
-    setState(() => error = null);
+  Future<void> _loadBranches() async {
+    setState(() {
+      _branchesLoading = true;
+      _branchesLoadError = null;
+      _branches = [];
+      _selectedBranchId = null;
+      _selectedBranchName = null;
+    });
 
+    try {
+      final snap = await _db.collection('branches').orderBy('name').get();
+      if (snap.docs.isEmpty) {
+        setState(() {
+          _branchesLoadError = 'No branches available. Ask admin to add branches.';
+        });
+        return;
+      }
+      _branches = snap.docs.map((d) {
+        final m = d.data();
+        return {
+          'id': d.id,
+          'name': m['name'] ?? d.id,
+          'lat': m['lat'],
+          'lng': m['lng'],
+        };
+      }).toList();
+
+      if (_branches.isNotEmpty) {
+        _selectedBranchId = _branches.first['id'] as String?;
+        _selectedBranchName = _branches.first['name'] as String?;
+      }
+    } catch (e) {
+      _branchesLoadError = 'Failed to load branches: $e';
+    } finally {
+      setState(() => _branchesLoading = false);
+    }
+  }
+
+  Future<void> _submit() async {
+    setState(() => error = null);
     final auth = Provider.of<AuthService>(context, listen: false);
 
     if (isLogin) {
@@ -45,38 +92,57 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
         setState(() => error = err);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Login failed: $err')));
       } else {
-        // success
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Logged in successfully')));
-        // optional: clear fields
-        passC.clear();
+        // successful login: determine role and navigate
+        await auth.loadUserData();
+        final role = (auth.userData?['role'] ?? 'staff').toString().toLowerCase();
+        if (!mounted) return;
+        if (role == 'manager' || role == 'admin') {
+          Navigator.pushReplacementNamed(context, '/admin');
+        } else {
+          Navigator.pushReplacementNamed(context, '/home');
+        }
       }
     } else {
-      final err = await auth.signUp(nameC.text.trim(), emailC.text.trim(), passC.text.trim());
+      // signup validation
+      if (_selectedBranchId == null) {
+        setState(() => error = 'Please select a branch (admin must create branches first).');
+        return;
+      }
+      if (nameC.text.trim().isEmpty) {
+        setState(() => error = 'Please enter your name.');
+        return;
+      }
+
+      final err = await auth.signUp(
+        nameC.text.trim(),
+        emailC.text.trim(),
+        passC.text.trim(),
+        branchId: _selectedBranchId!,
+        branchName: _selectedBranchName ?? '',
+      );
       if (err != null) {
         setState(() => error = err);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sign up failed: $err')));
       } else {
-        // success
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Account created')));
-        // clear fields
-        nameC.clear();
-        emailC.clear();
-        passC.clear();
-        // optionally switch to login view
-        setState(() => isLogin = true);
+        // successful signup -> load userData and navigate based on role
+        await auth.loadUserData();
+        final role = (auth.userData?['role'] ?? 'staff').toString().toLowerCase();
+        if (!mounted) return;
+        if (role == 'manager' || role == 'admin') {
+          Navigator.pushReplacementNamed(context, '/admin');
+        } else {
+          Navigator.pushReplacementNamed(context, '/home');
+        }
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-
     return Scaffold(
       backgroundColor: const Color(0xFF0F172A),
       body: Stack(
         children: [
-          // Animated background shape
           Positioned.fill(
             child: AnimatedBuilder(
               animation: _anim,
@@ -93,13 +159,10 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Title
                   Text('DOR', style: GoogleFonts.poppins(color: Colors.white, fontSize: 48, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 6),
                   Text('Attendance for your team', style: GoogleFonts.inter(color: Colors.white70, fontSize: 16)),
                   const SizedBox(height: 28),
-
-                  // Card with form
                   _AuthCard(
                     isLogin: isLogin,
                     nameC: nameC,
@@ -108,6 +171,18 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
                     onToggle: () => setState(() => isLogin = !isLogin),
                     onSubmit: _submit,
                     error: error,
+                    branches: _branches,
+                    selectedBranchId: _selectedBranchId,
+                    onBranchChanged: (id) {
+                      final b = _branches.firstWhere((e) => e['id'] == id);
+                      setState(() {
+                        _selectedBranchId = id;
+                        _selectedBranchName = b['name'] as String?;
+                      });
+                    },
+                    loadingBranches: _branchesLoading,
+                    branchesLoadError: _branchesLoadError,
+                    reloadBranches: _loadBranches,
                   ),
                 ],
               ),
@@ -119,13 +194,37 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
   }
 }
 
+
+/// _AuthCard accepts branch list and selection props; shows a friendly message if branches missing.
 class _AuthCard extends StatefulWidget {
   final bool isLogin;
   final TextEditingController nameC, emailC, passC;
   final VoidCallback onToggle;
   final Future<void> Function() onSubmit;
   final String? error;
-  const _AuthCard({Key? key, required this.isLogin, required this.nameC, required this.emailC, required this.passC, required this.onToggle, required this.onSubmit, this.error}) : super(key: key);
+  final List<Map<String, dynamic>> branches;
+  final String? selectedBranchId;
+  final bool loadingBranches;
+  final String? branchesLoadError;
+  final void Function(String?) onBranchChanged;
+  final Future<void> Function() reloadBranches;
+
+  const _AuthCard({
+    Key? key,
+    required this.isLogin,
+    required this.nameC,
+    required this.emailC,
+    required this.passC,
+    required this.onToggle,
+    required this.onSubmit,
+    this.error,
+    required this.branches,
+    required this.selectedBranchId,
+    required this.onBranchChanged,
+    required this.loadingBranches,
+    required this.branchesLoadError,
+    required this.reloadBranches,
+  }) : super(key: key);
 
   @override
   State<_AuthCard> createState() => _AuthCardState();
@@ -147,6 +246,44 @@ class _AuthCardState extends State<_AuthCard> with SingleTickerProviderStateMixi
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  Widget _branchDropdown() {
+    if (widget.loadingBranches) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8.0),
+        child: LinearProgressIndicator(),
+      );
+    }
+    if (widget.branchesLoadError != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(widget.branchesLoadError!, style: const TextStyle(color: Colors.orangeAccent)),
+          const SizedBox(height: 8),
+          ElevatedButton(onPressed: () => widget.reloadBranches(), child: const Text('Retry loading branches')),
+        ],
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      child: DropdownButtonFormField<String>(
+        value: widget.selectedBranchId,
+        items: widget.branches.map((b) {
+          return DropdownMenuItem<String>(
+            value: b['id'] as String,
+            child: Text(b['name'] as String),
+          );
+        }).toList(),
+        onChanged: widget.onBranchChanged,
+        decoration: InputDecoration(
+          labelText: 'Select branch',
+          filled: true,
+          fillColor: Colors.white.withOpacity(0.04),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+        ),
+      ),
+    );
   }
 
   @override
@@ -184,15 +321,17 @@ class _AuthCardState extends State<_AuthCard> with SingleTickerProviderStateMixi
             ),
             const SizedBox(height: 18),
 
-            if (!widget.isLogin)
-              _buildTextField('Full name', widget.nameC),
+            if (!widget.isLogin) _buildTextField('Full name', widget.nameC),
 
             _buildTextField('Email', widget.emailC, keyboard: TextInputType.emailAddress),
             _buildTextField('Password', widget.passC, obscure: true),
+
+            // Branch selector only on signup
+            if (!widget.isLogin) _branchDropdown(),
+
             const SizedBox(height: 12),
 
-            if (widget.error != null)
-              Text(widget.error!, style: const TextStyle(color: Colors.redAccent)),
+            if (widget.error != null) Text(widget.error!, style: const TextStyle(color: Colors.redAccent)),
 
             const SizedBox(height: 6),
 
@@ -247,6 +386,7 @@ class _AuthCardState extends State<_AuthCard> with SingleTickerProviderStateMixi
   }
 }
 
+// background painter (unchanged)
 class _BackgroundPainter extends CustomPainter {
   final double t;
   _BackgroundPainter(this.t);
@@ -255,7 +395,6 @@ class _BackgroundPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final paint = Paint()..style = PaintingStyle.fill;
 
-    // big rotating gradient blob
     final center = Offset(size.width * 0.2, size.height * 0.2);
     final r = size.width * 0.8;
     final angle = t * 2 * math.pi;
@@ -263,7 +402,6 @@ class _BackgroundPainter extends CustomPainter {
     paint.shader = gradient.createShader(Rect.fromCircle(center: center.translate(math.cos(angle) * 40, math.sin(angle) * 40), radius: r));
     canvas.drawCircle(center, r, paint);
 
-    // smaller subtle shapes
     final p2 = Paint()..color = Colors.white.withOpacity(0.02);
     canvas.drawCircle(Offset(size.width * 0.85, size.height * 0.15), size.width * 0.25, p2);
     canvas.drawCircle(Offset(size.width * 0.9, size.height * 0.85), size.width * 0.18, p2);

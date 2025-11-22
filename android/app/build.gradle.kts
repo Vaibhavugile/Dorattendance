@@ -4,17 +4,17 @@ plugins {
     id("com.google.gms.google-services")
     // END: FlutterFire Configuration
     id("kotlin-android")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    // Flutter Gradle Plugin must be applied after Android and Kotlin plugins
     id("dev.flutter.flutter-gradle-plugin")
 }
 
 android {
     namespace = "com.example.dor"
 
-    // Compile against newest SDK required by plugins:
+    // Required by Firebase, geolocator, image_picker and more
     compileSdk = 35
 
-    // Keep ndkVersion required by Firebase plugins:
+    // Required by Firebase plugins (firebase_auth, firebase_core, firebase_storage)
     ndkVersion = "27.0.12077973"
 
     compileOptions {
@@ -27,13 +27,13 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID
+        // Use your actual applicationId
         applicationId = "com.example.dor"
 
-        // Minimum supported Android version (firebase_storage needs >= 23)
+        // Firebase Storage requires minSdk >= 23
         minSdk = 23
 
-        // Target SDK — set to latest compile SDK (keeps behavior consistent)
+        // Target the same as compileSdk for stability
         targetSdk = 35
 
         versionCode = flutter.versionCode
@@ -42,7 +42,7 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
+            // Add your signing config here before publishing
             signingConfig = signingConfigs.getByName("debug")
         }
     }

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'services/auth_service.dart';
 import 'screens/auth_screen.dart';
 import 'screens/home_screen.dart';
+import 'admin/admin_dashboard.dart';
 
 // import 'firebase_options.dart'; // uncomment if you generated this via flutterfire
 
@@ -34,9 +35,13 @@ class DORApp extends StatelessWidget {
             seedColor: Colors.indigo,
             brightness: Brightness.dark,
           ),
-          // You can also customize textTheme here if you like:
-          // textTheme: GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme),
         ),
+        // central route names so other parts of app can use Navigator.pushNamed(...)
+        routes: {
+          '/auth': (context) => const AuthScreen(),
+          '/home': (context) => const HomeScreen(),
+          '/admin': (context) => const AdminDashboard(),
+        },
         home: const Root(),
       ),
     );
@@ -49,12 +54,32 @@ class Root extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthService>(context);
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 600),
-      transitionBuilder: (child, animation) => FadeTransition(opacity: animation, child: child),
-      child: auth.isLoading
-          ? const Scaffold(body: Center(child: CircularProgressIndicator()))
-          : (auth.user == null ? const AuthScreen() : const HomeScreen()),
-    );
+
+    // still initializing FirebaseAuth state / listener
+    if (auth.isLoading) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    // not signed in -> show auth screen
+    if (auth.user == null) {
+      return const AuthScreen();
+    }
+
+    // user is signed in but we haven't loaded the Firestore user doc (role, branch, etc.)
+    // trigger loadUserData() once and show a loader while it finishes
+    if (auth.user != null && auth.userData == null) {
+      // schedule a load without blocking build
+      Future.microtask(() => auth.loadUserData());
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    // At this point auth.user != null and auth.userData is available (or empty)
+    final role = (auth.userData?['role'] ?? 'staff').toString().toLowerCase();
+
+    if (role == 'manager' || role == 'admin') {
+      return const AdminDashboard();
+    } else {
+      return const HomeScreen();
+    }
   }
 }
