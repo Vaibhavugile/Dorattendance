@@ -48,6 +48,7 @@ dependencies:
   lottie: ^2.4.0
   confetti: ^0.7.0
   permission_handler: ^12.0.1
+  shared_preferences: ^2.2.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

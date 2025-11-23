@@ -31,7 +31,7 @@ android {
         applicationId = "com.example.dor"
 
         // Firebase Storage requires minSdk >= 23
-        minSdk = 23
+        minSdk = flutter.minSdkVersion
 
         // Target the same as compileSdk for stability
         targetSdk = 35
