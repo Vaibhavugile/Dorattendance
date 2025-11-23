@@ -138,35 +138,49 @@ class _BranchesAdminState extends State<BranchesAdmin> with SingleTickerProvider
                           ],
                         ),
                         const SizedBox(height: 12),
+
+                        // ---------- SAFER HORIZONTAL LAYOUT: make primary button flexible ----------
                         Row(
                           children: [
-                            ElevatedButton.icon(
-                              onPressed: loadingLocation ? null : () async {
-                                setModalState(() { loadingLocation = true; });
-                                try {
-                                  final pos = await _getCurrentPosition();
-                                  latCtrl.text = pos.latitude.toStringAsFixed(6);
-                                  lngCtrl.text = pos.longitude.toStringAsFixed(6);
-                                } catch (e) {
-                                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
-                                } finally {
-                                  setModalState(() { loadingLocation = false; });
-                                }
-                              },
-                              icon: const Icon(Icons.my_location),
-                              label: Text(loadingLocation ? 'Locating...' : 'Use my location'),
+                            // Let the main action take available space so it can shrink gracefully
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                onPressed: loadingLocation ? null : () async {
+                                  setModalState(() { loadingLocation = true; });
+                                  try {
+                                    final pos = await _getCurrentPosition();
+                                    latCtrl.text = pos.latitude.toStringAsFixed(6);
+                                    lngCtrl.text = pos.longitude.toStringAsFixed(6);
+                                  } catch (e) {
+                                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+                                  } finally {
+                                    setModalState(() { loadingLocation = false; });
+                                  }
+                                },
+                                icon: const Icon(Icons.my_location),
+                                label: Text(loadingLocation ? 'Locating...' : 'Use my location'),
+                              ),
                             ),
-                            const SizedBox(width: 12),
-                            TextButton(
-                              onPressed: () {
-                                latCtrl.clear();
-                                lngCtrl.clear();
-                              },
-                              child: const Text('Clear coords'),
-                            )
+
+                            const SizedBox(width: 8),
+
+                            // Keep the secondary action compact
+                            SizedBox(
+                              height: 48, // match typical button height to align nicely
+                              child: TextButton(
+                                onPressed: () {
+                                  latCtrl.clear();
+                                  lngCtrl.clear();
+                                },
+                                child: const Text('Clear'),
+                              ),
+                            ),
                           ],
                         ),
+
                         const SizedBox(height: 14),
+
+                        // Save/create row already used Expanded so it will fill width correctly
                         Row(
                           children: [
                             Expanded(

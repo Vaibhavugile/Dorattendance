@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
@@ -139,9 +140,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       if (picked == null) return;
       await _uploadFileAndSaveUrl(uid, File(picked.path));
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Image pick failed: $e')));
-      }
+      if (!mounted) return;
+      _showResultSnackBar(context, message: 'Image pick failed. Try again.', success: false);
+      debugPrint('Image pick failed: $e');
     }
   }
 
@@ -152,9 +153,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       if (picked == null) return;
       await _uploadFileAndSaveUrl(uid, File(picked.path));
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Camera failed: $e')));
-      }
+      if (!mounted) return;
+      _showResultSnackBar(context, message: 'Camera failed. Try again.', success: false);
+      debugPrint('Camera failed: $e');
     }
   }
 
@@ -182,13 +183,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       await _db.collection('users').doc(uid).update({'photoUrl': url});
 
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Profile updated')));
+        _showResultSnackBar(context, message: 'Profile updated', success: true);
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
-      }
+      if (!mounted) return;
+      _showErrorDialog(context, _friendlyMessageFromError(e), onRetry: () => _pickAndUploadProfile(uid));
+      debugPrint('Upload failed: $e');
     } finally {
       if (mounted) {
         setState(() {
@@ -216,6 +216,19 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   Future<void> _doCheckIn(String uid) async {
+    // Show premium confirmation modal BEFORE performing check-in
+    final confirmed = await showPremiumConfirmation(
+      context,
+      title: 'Confirm Check-In',
+      subtitle: 'Do you want to check in now?',
+      icon: Icons.login,
+      accentColor: Colors.tealAccent.shade700,
+      primaryButtonLabel: 'Check in',
+      secondaryButtonLabel: 'Cancel',
+    );
+
+    if (confirmed != true) return;
+
     debugPrint("[_doCheckIn] called uid=$uid");
     final docRef = _db.collection('users').doc(uid).collection('attendance').doc(_docIdForToday());
 
@@ -253,15 +266,29 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       });
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Checked in successfully!')));
+      _showResultSnackBar(context, message: 'Checked in successfully!', success: true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      final msg = _friendlyMessageFromError(e);
+      _showErrorDialog(context, msg, onRetry: () => _doCheckIn(uid));
+      debugPrint('Check-in error: $e');
     }
   }
 
   Future<void> _doCheckOut(String uid) async {
+    // Show premium confirmation modal BEFORE performing check-out
+    final confirmed = await showPremiumConfirmation(
+      context,
+      title: 'Confirm Check-Out',
+      subtitle: 'Are you sure you want to check out?',
+      icon: Icons.logout,
+      accentColor: Colors.deepPurpleAccent,
+      primaryButtonLabel: 'Check out',
+      secondaryButtonLabel: 'Cancel',
+    );
+
+    if (confirmed != true) return;
+
     debugPrint("[_doCheckOut] called uid=$uid");
     final docRef = _db.collection('users').doc(uid).collection('attendance').doc(_docIdForToday());
 
@@ -292,11 +319,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       });
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Checked out successfully!')));
+      _showResultSnackBar(context, message: 'Checked out successfully!', success: true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      final msg = _friendlyMessageFromError(e);
+      _showErrorDialog(context, msg, onRetry: () => _doCheckOut(uid));
+      debugPrint('Check-out error: $e');
     }
   }
 
@@ -412,8 +440,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                       if (!s.hasData) return const Text("Distance: —");
                                       return Text(
                                         "Distance: ${s.data!.round()} m",
-                                        style:
-                                            const TextStyle(fontWeight: FontWeight.w600),
+                                        style: const TextStyle(fontWeight: FontWeight.w600),
                                       );
                                     },
                                   ),
@@ -625,5 +652,449 @@ class _TimeTile extends StatelessWidget {
         }),
       ),
     );
+  }
+}
+
+// =====================================================
+// Friendly success/error UI helpers
+// =====================================================
+
+void _showResultSnackBar(BuildContext context, {required String message, bool success = true, String? actionLabel, VoidCallback? onAction}) {
+  final bg = success ? Colors.green[600] : Colors.red[700];
+  final icon = success ? Icons.check_circle : Icons.error_outline;
+
+  final snack = SnackBar(
+    behavior: SnackBarBehavior.floating,
+    backgroundColor: bg,
+    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    duration: const Duration(seconds: 3),
+    content: Row(
+      children: [
+        Icon(icon, color: Colors.white),
+        const SizedBox(width: 12),
+        Expanded(child: Text(message, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600))),
+        if (actionLabel != null)
+          TextButton(
+            onPressed: onAction,
+            child: Text(actionLabel, style: const TextStyle(color: Colors.white70)),
+          ),
+      ],
+    ),
+  );
+
+  ScaffoldMessenger.of(context).clearSnackBars();
+  ScaffoldMessenger.of(context).showSnackBar(snack);
+}
+
+Future<void> _showErrorDialog(BuildContext context, String message, {VoidCallback? onRetry}) async {
+  await showDialog(
+    context: context,
+    builder: (ctx) {
+      return _ShakingErrorDialog(message: message, onRetry: onRetry);
+    },
+  );
+}
+
+class _ShakingErrorDialog extends StatefulWidget {
+  final String message;
+  final VoidCallback? onRetry;
+  const _ShakingErrorDialog({required this.message, this.onRetry});
+
+  @override
+  __ShakingErrorDialogState createState() => __ShakingErrorDialogState();
+}
+
+class __ShakingErrorDialogState extends State<_ShakingErrorDialog> with SingleTickerProviderStateMixin {
+  late final AnimationController _c;
+  late final Animation<double> _shake;
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 550));
+    _shake = TweenSequence([
+      TweenSequenceItem(tween: Tween(begin: 0.0, end: -12.0), weight: 1),
+      TweenSequenceItem(tween: Tween(begin: -12.0, end: 12.0), weight: 2),
+      TweenSequenceItem(tween: Tween(begin: 12.0, end: -6.0), weight: 2),
+      TweenSequenceItem(tween: Tween(begin: -6.0, end: 0.0), weight: 1),
+    ]).animate(CurvedAnimation(parent: _c, curve: Curves.elasticIn));
+    _c.forward();
+  }
+  @override
+  void dispose() { _c.dispose(); super.dispose(); }
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: AnimatedBuilder(
+        animation: _shake,
+        builder: (context, child) {
+          return Transform.translate(
+            offset: Offset(_shake.value, 0),
+            child: SizedBox(
+              width: 320,
+              child: Padding(
+                padding: const EdgeInsets.all(18.0),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.error_outline, size: 48, color: Colors.red),
+                  const SizedBox(height: 12),
+                  Text('Oops', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Text(widget.message, textAlign: TextAlign.center),
+                  const SizedBox(height: 16),
+                  Row(children: [
+                    Expanded(child: TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))),
+                    const SizedBox(width: 8),
+                    if (widget.onRetry != null)
+                      Expanded(child: ElevatedButton(onPressed: () { Navigator.pop(context); widget.onRetry!(); }, child: const Text('Retry'))),
+                  ])
+                ]),
+              ),
+            ),
+          );
+        }
+      ),
+    );
+  }
+}
+
+String _friendlyMessageFromError(Object e) {
+  final s = e.toString().toLowerCase();
+
+  // 1) If the backend/logic returns "You are 355567 m away..." extract the number and show a friendly text.
+  final distanceRegex = RegExp(r'you are\s*([0-9.,]+)\s*m\s*away');
+  final dm = distanceRegex.firstMatch(s);
+  if (dm != null) {
+    // Normalize comma thousand separators, keep as integer for readability
+    final raw = dm.group(1) ?? '';
+    final normalized = raw.replaceAll(',', '');
+    final intDist = double.tryParse(normalized)?.round() ?? normalized;
+    return 'You are $intDist m away from the branch. Move closer (within 1 km) to check in/out.';
+  }
+
+  // 2) Other distance-style messages
+  if (s.contains('must be inside') || s.contains('outside the allowed') || s.contains('outside allowed')) {
+    return 'You are outside the allowed radius. Move within 1 km of the branch to check in/out.';
+  }
+
+  // 3) Permission / system messages
+  if (s.contains('location services are disabled') || s.contains('location services disabled')) {
+    return 'Location services are disabled. Please enable GPS and try again.';
+  }
+  if (s.contains('permission') || s.contains('denied')) {
+    return 'Location permission denied. Please enable location permission for the app.';
+  }
+
+  // 4) Attendance-specific messages
+  if (s.contains('already checked in')) return 'You already checked in today.';
+  if (s.contains('already checked out')) return 'You already checked out today.';
+  if (s.contains('not checked in') || s.contains('have not checked in')) return 'You have not checked in today.';
+
+  // Fallback
+  return 'Something went wrong. Try again.';
+}
+
+
+// =====================================================
+// PREMIUM CONFIRMATION MODAL (reusable)
+// =====================================================
+
+Future<bool?> showPremiumConfirmation(
+  BuildContext context, {
+  required String title,
+  required String subtitle,
+  String primaryButtonLabel = 'Confirm',
+  String secondaryButtonLabel = 'Cancel',
+  IconData icon = Icons.check_circle_outline,
+  Color accentColor = Colors.blueAccent,
+}) {
+  return showGeneralDialog<bool>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: 'Premium Confirmation',
+    transitionDuration: const Duration(milliseconds: 420),
+    pageBuilder: (ctx, animation, secondaryAnimation) {
+      // The real UI is built inside transitionBuilder below for animations.
+      return const SizedBox.shrink();
+    },
+    transitionBuilder: (ctx, animation, secondaryAnimation, child) {
+      final curved = Curves.easeOutBack.transform(animation.value);
+
+      return Opacity(
+        opacity: animation.value,
+        child: Transform.scale(
+          scale: 0.9 + (curved * 0.1),
+          child: _PremiumDialogContent(
+            title: title,
+            subtitle: subtitle,
+            primaryLabel: primaryButtonLabel,
+            secondaryLabel: secondaryButtonLabel,
+            icon: icon,
+            accentColor: accentColor,
+          ),
+        ),
+      );
+    },
+  );
+}
+
+class _PremiumDialogContent extends StatefulWidget {
+  final String title;
+  final String subtitle;
+  final String primaryLabel;
+  final String secondaryLabel;
+  final IconData icon;
+  final Color accentColor;
+
+  const _PremiumDialogContent({
+    Key? key,
+    required this.title,
+    required this.subtitle,
+    required this.primaryLabel,
+    required this.secondaryLabel,
+    required this.icon,
+    required this.accentColor,
+  }) : super(key: key);
+
+  @override
+  __PremiumDialogContentState createState() => __PremiumDialogContentState();
+}
+
+class __PremiumDialogContentState extends State<_PremiumDialogContent>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _pulse;
+  bool _isConfirming = false;
+  bool _showSuccess = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    )..repeat(reverse: true);
+
+    _pulse = Tween<double>(begin: 0.98, end: 1.06).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _onConfirm() async {
+    if (_isConfirming) return;
+    setState(() => _isConfirming = true);
+
+    // Small success animation inside the dialog before closing.
+    await Future.delayed(const Duration(milliseconds: 450));
+    setState(() => _showSuccess = true);
+
+    // Let the user enjoy the success animation for a short moment.
+    await Future.delayed(const Duration(milliseconds: 700));
+
+    if (mounted) Navigator.of(context).pop(true);
+  }
+
+  void _onCancel() {
+    if (_isConfirming) return;
+    Navigator.of(context).pop(false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final width = MediaQuery.of(context).size.width * 0.84;
+    final radius = 18.0;
+
+    return Center(
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          width: width,
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(radius),
+            gradient: LinearGradient(
+              colors: [widget.accentColor.withOpacity(0.12), Colors.white],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.16),
+                blurRadius: 18,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(radius),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+              child: AnimatedSize(
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeOutCubic,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(height: 6),
+                    // Top decorative bar
+                    Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: widget.accentColor.withOpacity(0.9),
+                        borderRadius: BorderRadius.circular(2),
+                        boxShadow: [
+                          BoxShadow(
+                            color: widget.accentColor.withOpacity(0.25),
+                            blurRadius: 8,
+                            offset: const Offset(0, 4),
+                          )
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+
+                    // Animated icon area
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 420),
+                      child: _showSuccess
+                          ? _buildSuccessState()
+                          : ScaleTransition(
+                              scale: _pulse,
+                              child: _buildIconCircle(),
+                            ),
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    Text(widget.title,
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        )),
+                    const SizedBox(height: 8),
+                    Text(widget.subtitle,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: Colors.black87,
+                        )),
+
+                    const SizedBox(height: 20),
+
+                    // Buttons
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextButton(
+                            onPressed: _isConfirming ? null : _onCancel,
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            child: Text(widget.secondaryLabel,
+                                style: TextStyle(
+                                  color: widget.accentColor.darken(),
+                                  fontWeight: FontWeight.w600,
+                                )),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: _isConfirming ? null : _onConfirm,
+                            style: ElevatedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              elevation: 6,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              backgroundColor: widget.accentColor,
+                            ),
+                            child: _isConfirming
+                                ? const SizedBox(
+                                    height: 18,
+                                    width: 18,
+                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                  )
+                                : Text(widget.primaryLabel,
+                                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildIconCircle() {
+    return Container(
+      key: const ValueKey('icon'),
+      width: 96,
+      height: 96,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(
+          colors: [widget.accentColor.withOpacity(0.95), widget.accentColor.withOpacity(0.6)],
+          center: Alignment(-0.4, -0.6),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: widget.accentColor.withOpacity(0.28),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          )
+        ],
+      ),
+      child: Center(
+        child: Icon(widget.icon, size: 44, color: Colors.white),
+      ),
+    );
+  }
+
+  Widget _buildSuccessState() {
+    return Container(
+      key: const ValueKey('success'),
+      width: 96,
+      height: 96,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: const LinearGradient(colors: [Color(0xFF00C853), Color(0xFF64DD17)]),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.green.withOpacity(0.28),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          )
+        ],
+      ),
+      child: const Center(
+        child: Icon(Icons.check, size: 44, color: Colors.white),
+      ),
+    );
+  }
+}
+
+// Small extension to darken colors for text buttons
+extension _ColorExt on Color {
+  Color darken([double amount = .15]) {
+    assert(amount >= 0 && amount <= 1);
+    final hsl = HSLColor.fromColor(this);
+    final hslDark = hsl.withLightness((hsl.lightness - amount).clamp(0.0, 1.0));
+    return hslDark.toColor();
   }
 }

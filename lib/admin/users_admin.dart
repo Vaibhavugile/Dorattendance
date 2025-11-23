@@ -376,8 +376,6 @@ class _UsersAdminState extends State<UsersAdmin> with SingleTickerProviderStateM
               boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 1))],
             ),
           ),
-          const SizedBox(width: 8),
-          Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13)),
         ],
       ),
     );
