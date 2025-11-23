@@ -159,7 +159,14 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text('DOR', style: GoogleFonts.poppins(color: Colors.white, fontSize: 48, fontWeight: FontWeight.w700)),
+                  SizedBox(
+  height: 84,
+  child: Image.asset(
+    'assets/images/logo.png',
+    fit: BoxFit.contain,
+  ),
+),
+
                   const SizedBox(height: 6),
                   Text('Attendance for your team', style: GoogleFonts.inter(color: Colors.white70, fontSize: 16)),
                   const SizedBox(height: 28),

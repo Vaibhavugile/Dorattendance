@@ -30,6 +30,7 @@ class DORApp extends StatelessWidget {
         title: 'DOR',
         theme: ThemeData(
           useMaterial3: true,
+          fontFamily: 'Cinzel',
           // create a ColorScheme with explicit dark brightness so there is no mismatch
           colorScheme: ColorScheme.fromSeed(
             seedColor: Colors.indigo,
