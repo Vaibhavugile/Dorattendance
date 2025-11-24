@@ -49,6 +49,8 @@ dependencies:
   confetti: ^0.7.0
   permission_handler: ^12.0.1
   shared_preferences: ^2.2.0
+  
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -59,6 +61,8 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.13.1
+  flutter_native_splash: ^2.3.10
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -87,6 +91,8 @@ flutter:
   # "family" key with the font family name, and a "fonts" key with a
   # list giving the asset and other descriptors for the font. For
   # example:
+ 
+
   fonts:
     - family: Cinzel
       fonts:
@@ -99,3 +105,21 @@ flutter:
           weight: 700
         - asset: assets/fonts/Cinzel/Cinzel-Black.ttf
           weight: 900
+
+flutter_native_splash:
+  color: "#0F172A"        # Background color same as AuthScreen
+  image: assets/images/logo.png   # Your logo
+  android: true
+  ios: true
+  web: true
+
+  android_gravity: center
+  ios_content_mode: center
+
+  fullscreen: true
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icons/app_icon.png"
+  min_sdk_android: 21
