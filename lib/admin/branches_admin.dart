@@ -1,4 +1,3 @@
-// lib/screens/branches_admin.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
@@ -8,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 ///  - Animated, modern card UI
 ///  - Create / Edit / Delete branches with validation
 ///  - "Use my location" button fills lat/lng via Geolocator
+///  - Add / edit `radiusMeters` per-branch (defaults to 1000m)
 ///  - Empty / loading / error states
 ///  - Smooth modal bottom sheet form and confirmations
 class BranchesAdmin extends StatefulWidget {
@@ -23,6 +23,9 @@ class _BranchesAdminState extends State<BranchesAdmin> with SingleTickerProvider
   // animations
   late final AnimationController _entranceController;
   late final Animation<double> _fadeIn;
+
+  // default radius used when creating a branch or when branch doc doesn't include radiusMeters
+  static const int _defaultRadiusMeters = 1000;
 
   @override
   void initState() {
@@ -50,6 +53,17 @@ class _BranchesAdminState extends State<BranchesAdmin> with SingleTickerProvider
     return await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.best);
   }
 
+  String _formatRadiusDisplay(int meters) {
+    if (meters % 1000 == 0) {
+      return '${meters ~/ 1000} km';
+    } else if (meters >= 1000) {
+      final km = meters / 1000.0;
+      return '${km.toStringAsFixed(1)} km';
+    } else {
+      return '$meters m';
+    }
+  }
+
   Future<void> _showBranchForm({DocumentSnapshot? editing}) async {
     final isEditing = editing != null;
     final Map<String, dynamic>? editingData = editing?.data() as Map<String, dynamic>?;
@@ -57,6 +71,13 @@ class _BranchesAdminState extends State<BranchesAdmin> with SingleTickerProvider
     final addrCtrl = TextEditingController(text: editingData?['address'] as String? ?? '');
     final latCtrl = TextEditingController(text: (editingData?['lat'] != null) ? editingData!['lat'].toString() : '');
     final lngCtrl = TextEditingController(text: (editingData?['lng'] != null) ? editingData!['lng'].toString() : '');
+
+    // radius controller (meters) — if editing and value present, show it; otherwise default empty to let user decide
+    final radiusInitial = (editingData != null && editingData.containsKey('radiusMeters'))
+        ? (editingData!['radiusMeters']?.toString() ?? _defaultRadiusMeters.toString())
+        : _defaultRadiusMeters.toString();
+    final radiusCtrl = TextEditingController(text: radiusInitial);
+
     final formKey = GlobalKey<FormState>();
     bool loadingLocation = false;
 
@@ -139,6 +160,27 @@ class _BranchesAdminState extends State<BranchesAdmin> with SingleTickerProvider
                         ),
                         const SizedBox(height: 12),
 
+                        // Radius input (in meters)
+                        TextFormField(
+                          controller: radiusCtrl,
+                          decoration: InputDecoration(
+                            labelText: 'Allowed radius (meters)',
+                            hintText: 'e.g. 1000',
+                            prefixIcon: const Icon(Icons.circle_outlined),
+                          ),
+                          keyboardType: const TextInputType.numberWithOptions(decimal: false, signed: false),
+                          validator: (v) {
+                            if (v == null || v.trim().isEmpty) return 'Provide radius in meters';
+                            final n = int.tryParse(v.replaceAll(',', '').trim());
+                            if (n == null) return 'Invalid number';
+                            if (n <= 0) return 'Radius must be positive';
+                            if (n > 100000) return 'Radius too large';
+                            return null;
+                          },
+                        ),
+
+                        const SizedBox(height: 12),
+
                         // ---------- SAFER HORIZONTAL LAYOUT: make primary button flexible ----------
                         Row(
                           children: [
@@ -187,11 +229,15 @@ class _BranchesAdminState extends State<BranchesAdmin> with SingleTickerProvider
                               child: FilledButton(
                                 onPressed: () async {
                                   if (!formKey.currentState!.validate()) return;
+
+                                  final parsedRadius = int.tryParse(radiusCtrl.text.replaceAll(',', '').trim()) ?? _defaultRadiusMeters;
+
                                   final data = {
                                     'name': nameCtrl.text.trim(),
                                     'address': addrCtrl.text.trim(),
                                     'lat': double.parse(latCtrl.text.trim()),
                                     'lng': double.parse(lngCtrl.text.trim()),
+                                    'radiusMeters': parsedRadius,
                                     'updatedAt': FieldValue.serverTimestamp(),
                                   };
                                   try {
@@ -312,6 +358,9 @@ class _BranchesAdminState extends State<BranchesAdmin> with SingleTickerProvider
                 final addr = data['address'] as String? ?? '';
                 final lat = data['lat'];
                 final lng = data['lng'];
+                final radius = (data.containsKey('radiusMeters') && data['radiusMeters'] != null)
+                    ? (data['radiusMeters'] is num ? (data['radiusMeters'] as num).toInt() : int.tryParse(data['radiusMeters'].toString()) ?? _defaultRadiusMeters)
+                    : _defaultRadiusMeters;
 
                 return Material(
                   elevation: 2,
@@ -320,8 +369,12 @@ class _BranchesAdminState extends State<BranchesAdmin> with SingleTickerProvider
                   child: ListTile(
                     contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                     title: Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                    subtitle: Text(addr.isNotEmpty ? '$addr\n(${lat?.toStringAsFixed(6) ?? '-'}, ${lng?.toStringAsFixed(6) ?? '-'})' : '(${lat?.toStringAsFixed(6) ?? '-'}, ${lng?.toStringAsFixed(6) ?? '-'})'),
-                    isThreeLine: addr.isNotEmpty,
+                    subtitle: Text(
+                      '${addr.isNotEmpty ? '$addr\n' : ''}(${lat?.toStringAsFixed(6) ?? '-'}, ${lng?.toStringAsFixed(6) ?? '-'})\nRadius: ${_formatRadiusDisplay(radius)}',
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    isThreeLine: true,
                     leading: CircleAvatar(child: const Icon(Icons.store)),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -350,6 +403,8 @@ class _BranchesAdminState extends State<BranchesAdmin> with SingleTickerProvider
                               const SizedBox(height: 8),
                               Text('Latitude: ${lat?.toStringAsFixed(6) ?? '-'}'),
                               Text('Longitude: ${lng?.toStringAsFixed(6) ?? '-'}'),
+                              const SizedBox(height: 8),
+                              Text('Allowed radius: ${_formatRadiusDisplay(radius)}'),
                             ],
                           ),
                           actions: [

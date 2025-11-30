@@ -91,6 +91,11 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
       if (err != null) {
         setState(() => error = err);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Login failed: $err')));
+
+        // If the error indicates a device-lock, surface a recovery CTA
+        if (err.toLowerCase().contains('registered on another device') || err.toLowerCase().contains('registered to another device')) {
+          _showDeviceLockedDialog(emailC.text.trim());
+        }
       } else {
         // successful login: determine role and navigate
         await auth.loadUserData();
@@ -137,6 +142,87 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
     }
   }
 
+  void _showDeviceLockedDialog(String email) {
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Device locked'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('This account is registered to a different device.'),
+              const SizedBox(height: 8),
+              const Text('To regain access you can start an account recovery flow. We will require verification (OTP sent to your email or phone).'),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                _showRecoveryDialog(email);
+              },
+              child: const Text('Recover account'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showRecoveryDialog(String email) {
+    final otpC = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Account recovery'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Enter the verification code sent to $email (placeholder flow).'),
+              const SizedBox(height: 8),
+              TextField(controller: otpC, decoration: const InputDecoration(labelText: 'OTP / Code')),
+              const SizedBox(height: 8),
+              const Text('Note: in production this must be backed by a secure server-side verification step.'),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () async {
+                final code = otpC.text.trim();
+                if (code.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter the verification code')));
+                  return;
+                }
+
+                Navigator.of(ctx).pop();
+
+                final auth = Provider.of<AuthService>(context, listen: false);
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Verifying...')));
+
+                // This calls the placeholder replaceDeviceToken method. In production,
+                // you should call your backend to verify the OTP and then update the
+                // device token server-side. The AuthService.replaceDeviceToken here
+                // is only a convenience and assumes the server has already validated.
+                final err = await auth.replaceDeviceToken(verificationProof: code);
+                if (err != null) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Recovery failed: $err')));
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Device unlocked. Please sign in again.')));
+                }
+              },
+              child: const Text('Submit'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -160,12 +246,12 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   SizedBox(
-  height: 84,
-  child: Image.asset(
-    'assets/images/logo.png',
-    fit: BoxFit.contain,
-  ),
-),
+                    height: 84,
+                    child: Image.asset(
+                      'assets/images/logo.png',
+                      fit: BoxFit.contain,
+                    ),
+                  ),
 
                   const SizedBox(height: 6),
                   Text('Attendance for your team', style: GoogleFonts.inter(color: Colors.white70, fontSize: 16)),

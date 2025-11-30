@@ -1,9 +1,11 @@
-// lib/admin/user_detail.dart
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:file_saver/file_saver.dart';
+import 'package:open_file/open_file.dart';
 
 /// Redesigned UserDetailPage with:
 /// - From/To range selection
@@ -11,6 +13,8 @@ import 'package:intl/intl.dart';
 /// - Full scrollable attendance table (descending)
 /// - Segmented control to filter: All / Present / Absent
 /// - Defensive layout changes to avoid overflow errors
+/// - CSV export of the full attendance range using file_saver
+/// - Delete user action (confirmation + deletes attendance subcollection then user doc)
 class UserDetailPage extends StatefulWidget {
   final String uid;
   const UserDetailPage({Key? key, required this.uid}) : super(key: key);
@@ -50,6 +54,9 @@ class _UserDetailPageState extends State<UserDetailPage> with SingleTickerProvid
 
   // scroll
   final ScrollController _historyScroll = ScrollController();
+
+  // deleting state
+  bool _deletingUser = false;
 
   @override
   void initState() {
@@ -244,6 +251,165 @@ class _UserDetailPageState extends State<UserDetailPage> with SingleTickerProvid
     await Future.delayed(const Duration(milliseconds: 100));
     if (_historyScroll.hasClients) {
       _historyScroll.animateTo(0, duration: const Duration(milliseconds: 320), curve: Curves.easeOut);
+    }
+  }
+
+  // --- CSV export (file_saver) ---
+  String _escapeCsv(String input) {
+    if (input.contains(',') || input.contains('"') || input.contains('\n')) {
+      return '"' + input.replaceAll('"', '""') + '"';
+    }
+    return input;
+  }
+
+  Future<void> _exportCsv() async {
+    try {
+      final days = _daysInRange(_from, _to);
+
+      final sb = StringBuffer();
+      sb.writeln('Date,In,Out,Duration,Present');
+
+      for (final d in days) {
+        final id = _docIdForDate(d);
+        final m = _attendanceByDate[id];
+        final inTs = m?['checkIn'] as Timestamp?;
+        final outTs = m?['checkOut'] as Timestamp?;
+        final present = inTs != null;
+
+        final dateLabel = _formatDateLong(d);
+        final inLabel = (inTs != null) ? DateFormat('yyyy-MM-dd HH:mm:ss').format(inTs.toDate().toLocal()) : '';
+        final outLabel = (outTs != null) ? DateFormat('yyyy-MM-dd HH:mm:ss').format(outTs.toDate().toLocal()) : '';
+        final durLabel = (present) ? _durationLabel(inTs, outTs) : '';
+        final presentLabel = present ? 'yes' : 'no';
+
+        final row = [dateLabel, inLabel, outLabel, durLabel, presentLabel].map((s) => _escapeCsv(s)).join(',');
+        sb.writeln(row);
+      }
+
+      final csvString = sb.toString();
+      final bytes = Uint8List.fromList(csvString.codeUnits);
+      final filename = '${(_userDoc?['name'] ?? 'user').toString().replaceAll(' ', '_')}_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.csv';
+
+      // Save the file. FileSaver returns a dynamic value — often a path string, sometimes a URI/object.
+      final saved = await FileSaver.instance.saveFile(
+        name: filename,
+        bytes: bytes,
+        ext: 'csv',
+        mimeType: MimeType.csv,
+      );
+
+      // Normalize returned value to a path-like string if possible.
+      String? savedPath;
+      if (saved == null) {
+        savedPath = null;
+      } else if (saved is String && saved.isNotEmpty) {
+        savedPath = saved;
+      } else {
+        // Sometimes it's a Map or other object; try toString as fallback (may be a content URI)
+        savedPath = saved.toString();
+      }
+
+      final success = savedPath != null && savedPath.isNotEmpty;
+
+      if (!mounted) return;
+
+      if (success) {
+        // Show SnackBar with path and Open button. Tapping Open will attempt to open the file.
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Saved CSV: ${savedPath.split('/').last}'),
+            duration: const Duration(seconds: 6),
+            action: SnackBarAction(
+              label: 'Open',
+              onPressed: () async {
+                try {
+                  // Attempt to open — OpenFile handles many platforms
+                  final result = await OpenFile.open(savedPath);
+                  // optionally handle result.type / result.message if you want to log it
+                  if (result.type != ResultType.done) {
+                    // Show brief message if open failed
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not open file: ${result.message}')));
+                    }
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to open file: $e')));
+                  }
+                }
+              },
+            ),
+          ),
+        );
+
+        // Also show the absolute/specific path in a secondary SnackBar (short)
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Saved to: $savedPath'), duration: const Duration(seconds: 4)));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to save CSV')));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to export CSV: $e')));
+    }
+  }
+
+  // --- Delete user ---
+  Future<void> _confirmAndDeleteUser() async {
+    // prevent re-entrancy
+    if (_deletingUser) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete user'),
+        content: const Text('This will permanently delete the user and ALL their attendance records. This action cannot be undone. Are you sure?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _deleteUser();
+    }
+  }
+
+  Future<void> _deleteUser() async {
+    setState(() => _deletingUser = true);
+    // cancel attendance listener so we can safely delete
+    await _attendanceSub?.cancel();
+
+    try {
+      final attendanceCol = _db.collection('users').doc(widget.uid).collection('attendance');
+
+      // Fetch all attendance docs (note: if you have huge data, consider paginating or a cloud function recursive delete)
+      QuerySnapshot snap = await attendanceCol.get();
+      final docs = snap.docs;
+
+      // Delete in batches of 500 (Firestore batch limit)
+      const int batchSize = 500;
+      for (var i = 0; i < docs.length; i += batchSize) {
+        final batch = _db.batch();
+        final end = (i + batchSize < docs.length) ? i + batchSize : docs.length;
+        for (var j = i; j < end; j++) {
+          batch.delete(docs[j].reference);
+        }
+        await batch.commit();
+      }
+
+      // finally delete the user document
+      await _db.collection('users').doc(widget.uid).delete();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('User deleted')));
+      Navigator.of(context).maybePop();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete user: $e')));
+    } finally {
+      if (mounted) setState(() => _deletingUser = false);
     }
   }
 
@@ -518,7 +684,21 @@ class _UserDetailPageState extends State<UserDetailPage> with SingleTickerProvid
                 _subscribeAttendanceRange();
               }
             },
-          )
+          ),
+          // export CSV button
+          IconButton(
+            icon: const Icon(Icons.file_download),
+            onPressed: _loadingAttendanceRange ? null : _exportCsv,
+            tooltip: 'Export CSV',
+          ),
+
+          // DELETE user button
+          IconButton(
+            icon: _deletingUser ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.delete_forever),
+            onPressed: (_loadingUser || _deletingUser) ? null : _confirmAndDeleteUser,
+            tooltip: 'Delete user',
+            color: Colors.redAccent,
+          ),
         ],
       ),
       body: Padding(
@@ -532,6 +712,7 @@ class _UserDetailPageState extends State<UserDetailPage> with SingleTickerProvid
                     elevation: 4,
                     borderRadius: BorderRadius.circular(12),
                     child: Container(height: 86, alignment: Alignment.center, padding: const EdgeInsets.symmetric(horizontal: 12), child: const SizedBox(height: 6, width: double.infinity, child: LinearProgressIndicator())),
+
                   )
                 : _userLoadError != null
                     ? Material(

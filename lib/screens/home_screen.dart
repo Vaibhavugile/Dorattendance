@@ -32,8 +32,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   String? _lastLoadedBranchId; // <=== FIX prevents reloading every rebuild
 
   // Fixed radius 1 km
-  static const int _allowedRadiusMeters = 1000;
-
+  int _allowedRadiusMeters = 1000;
   @override
   void initState() {
     super.initState();
@@ -65,34 +64,59 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     });
   }
 
-  Future<void> _loadUserBranch(String uid, Map<String, dynamic>? userDocData) async {
-    try {
-      final branchId = userDocData?['branchId'] as String?;
-      if (branchId == null) {
-        setState(() => _branchLoadError = 'No branch assigned. Contact admin.');
-        return;
-      }
-
-      final bSnap = await _db.collection('branches').doc(branchId).get();
-      if (!bSnap.exists) {
-        setState(() => _branchLoadError = 'Branch not found. Contact admin.');
-        return;
-      }
-
-      final m = bSnap.data()!;
-      setState(() {
-        _userBranch = {
-          'id': bSnap.id,
-          'name': m['name'],
-          'lat': m['lat'],
-          'lng': m['lng'],
-        };
-        _branchLoadError = null;
-      });
-    } catch (e) {
-      setState(() => _branchLoadError = 'Failed to load branch: $e');
-    }
+  String _formatRadiusDisplay(int meters) {
+  if (meters % 1000 == 0) {
+    return '${meters ~/ 1000} km';
+  } else if (meters >= 1000) {
+    final km = meters / 1000.0;
+    return '${km.toStringAsFixed(1)} km';
+  } else {
+    return '$meters m';
   }
+}
+
+
+ Future<void> _loadUserBranch(String uid, Map<String, dynamic>? userDocData) async {
+  try {
+    final branchId = userDocData?['branchId'] as String?;
+    if (branchId == null) {
+      setState(() => _branchLoadError = 'No branch assigned. Contact admin.');
+      return;
+    }
+
+    final bSnap = await _db.collection('branches').doc(branchId).get();
+    if (!bSnap.exists) {
+      setState(() => _branchLoadError = 'Branch not found. Contact admin.');
+      return;
+    }
+
+    final m = bSnap.data()!;
+    setState(() {
+      _userBranch = {
+        'id': bSnap.id,
+        'name': m['name'],
+        'lat': m['lat'],
+        'lng': m['lng'],
+      };
+
+      // Override allowed radius if branch doc provides radiusMeters
+      if (m.containsKey('radiusMeters')) {
+        final r = m['radiusMeters'];
+        if (r is num) {
+          _allowedRadiusMeters = r.toInt();
+        } else if (r is String) {
+          final parsed = int.tryParse(r.replaceAll(',', ''));
+          if (parsed != null) _allowedRadiusMeters = parsed;
+        }
+      }
+
+      _branchLoadError = null;
+    });
+  } catch (e) {
+    setState(() => _branchLoadError = 'Failed to load branch: $e');
+  }
+}
+
 
   Future<Position> _determinePositionOrThrow() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -126,8 +150,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
 
     if (d > _allowedRadiusMeters) {
-      throw 'You are ${d.round()} m away. Must be inside 1 km to check-in/out.';
-    }
+  final thresholdDisplay = _formatRadiusDisplay(_allowedRadiusMeters);
+  throw 'You are ${d.round()} m away. Must be inside $thresholdDisplay to check-in/out.';
+}
+
   }
 
   // ============================
@@ -428,8 +454,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
                       Row(
                         children: [
-                          const Text("Required radius: 1 km",
-                              style: TextStyle(fontWeight: FontWeight.bold)),
+                        Text("Required radius: ${_formatRadiusDisplay(_allowedRadiusMeters)}",
+                             style: const TextStyle(fontWeight: FontWeight.bold)),
+
                           const SizedBox(width: 12),
                           Expanded(
                             child: _userBranch == null
