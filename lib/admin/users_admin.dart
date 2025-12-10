@@ -475,16 +475,13 @@ class _UsersAdminState extends State<UsersAdmin> with SingleTickerProviderStateM
         elevation: 2,
         borderRadius: BorderRadius.circular(12),
         child: InkWell(
-          // inside _userCard(...) replace the onTap: () { ... } with:
-
-onTap: () {
-  Navigator.of(context).push(
-    MaterialPageRoute(
-      builder: (_) => UserDetailPage(uid: uid),
-    ),
-  );
-},
-
+          onTap: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => UserDetailPage(uid: uid),
+              ),
+            );
+          },
           borderRadius: BorderRadius.circular(12),
           child: Container(
             padding: const EdgeInsets.all(12),
@@ -532,36 +529,65 @@ onTap: () {
     final branchesStream = _db.collection('branches').orderBy('name').snapshots();
     final usersQuery = _usersQuery();
 
-    return Column(
-      children: [
-        _headerCard(context),
-        // counts & search/filter live interactions
-        // counts are computed by the subscription (not in build) so here just show current values
-        _countsBar(context),
-        StreamBuilder<QuerySnapshot>(
-          stream: branchesStream,
-          builder: (ctx, branchSnap) {
-            final branches = branchSnap.hasData ? branchSnap.data!.docs : <QueryDocumentSnapshot>[];
-            return _searchAndFilter(context, branches.cast<QueryDocumentSnapshot>());
-          },
-        ),
-        const SizedBox(height: 6),
-        // users list with attendance indicator
-        Expanded(
-          child: StreamBuilder<QuerySnapshot>(
+    return RefreshIndicator(
+      onRefresh: () async {
+        _todayAttendanceCache.clear();
+        _lastUserIds = [];
+        _usersSub?.cancel();
+        _subscribeToUsers();
+        await Future.delayed(const Duration(milliseconds: 250));
+      },
+      // Single scrollable area containing header + counts + search + user list
+      child: CustomScrollView(
+        slivers: [
+          // Header card (scrolls away)
+          SliverToBoxAdapter(child: Padding(
+            padding: const EdgeInsets.only(top: 12.0),
+            child: _headerCard(context),
+          )),
+          // Counts bar
+          SliverToBoxAdapter(child: _countsBar(context)),
+          // Search & Filter (depends on branches stream)
+          SliverToBoxAdapter(
+            child: StreamBuilder<QuerySnapshot>(
+              stream: branchesStream,
+              builder: (ctx, branchSnap) {
+                final branches = branchSnap.hasData ? branchSnap.data!.docs : <QueryDocumentSnapshot>[];
+                return _searchAndFilter(context, branches.cast<QueryDocumentSnapshot>());
+              },
+            ),
+          ),
+          SliverToBoxAdapter(child: const SizedBox(height: 6)),
+
+          // Users stream - returns different slivers depending on state
+          StreamBuilder<QuerySnapshot>(
             stream: usersQuery.snapshots(),
             builder: (context, snap) {
-              if (snap.hasError) return Center(child: Text('Error: ${snap.error}'));
-              if (!snap.hasData) {
-                return ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  itemCount: 6,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                  itemBuilder: (c, i) => _cardShimmerPlaceholder(context),
+              if (snap.hasError) {
+                return SliverToBoxAdapter(
+                  child: Container(
+                    height: 120,
+                    alignment: Alignment.center,
+                    child: Text('Error: ${snap.error}'),
+                  ),
                 );
               }
 
-              final list = snap.data!.docs.where((d) {
+              if (!snap.hasData) {
+                // Loading placeholders (shimmer cards)
+                return SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (c, i) => Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 6),
+                      child: _cardShimmerPlaceholder(context),
+                    ),
+                    childCount: 6,
+                  ),
+                );
+              }
+
+              final allDocs = snap.data!.docs;
+              final filtered = allDocs.where((d) {
                 if (_search.isEmpty) return true;
                 final m = d.data() as Map<String, dynamic>? ?? {};
                 final name = (m['name'] ?? '').toString().toLowerCase();
@@ -569,40 +595,44 @@ onTap: () {
                 return name.contains(_search.toLowerCase()) || email.contains(_search.toLowerCase());
               }).toList();
 
-              if (list.isEmpty) {
-                return Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.person_off, size: 84, color: Colors.grey.shade600),
-                      const SizedBox(height: 12),
-                      Text('No staff found', style: Theme.of(context).textTheme.titleMedium),
-                      const SizedBox(height: 6),
-                      Text('Try removing filters or add staff from the admin panel', style: Theme.of(context).textTheme.bodySmall),
-                    ],
+              if (filtered.isEmpty) {
+                return SliverToBoxAdapter(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 40),
+                    alignment: Alignment.center,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.person_off, size: 84, color: Colors.grey.shade600),
+                        const SizedBox(height: 12),
+                        Text('No staff found', style: Theme.of(context).textTheme.titleMedium),
+                        const SizedBox(height: 6),
+                        Text('Try removing filters or add staff from the admin panel', style: Theme.of(context).textTheme.bodySmall),
+                      ],
+                    ),
                   ),
                 );
               }
 
-              return RefreshIndicator(
-                onRefresh: () async {
-                  _todayAttendanceCache.clear();
-                  _lastUserIds = [];
-                  _usersSub?.cancel();
-                  _subscribeToUsers();
-                  await Future.delayed(const Duration(milliseconds: 250));
-                },
-                child: ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  itemCount: list.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                  itemBuilder: (c, i) => _userCard(c, list[i], i),
+              // Real user list
+              return SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (c, i) {
+                    final doc = filtered[i];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 6.0),
+                      child: _userCard(context, doc, i),
+                    );
+                  },
+                  childCount: filtered.length,
                 ),
               );
             },
           ),
-        ),
-      ],
+          // Add some bottom padding so last item isn't flush to the bottom edge
+          SliverToBoxAdapter(child: const SizedBox(height: 20)),
+        ],
+      ),
     );
   }
 }
